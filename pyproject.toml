@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "yicloud-cli"
+version = "0.1.0"
+description = "Command-line interface for YiCloud OpenAPI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "yicloud-sdk-python @ git+https://gitee.com/yicloud-team/openapi-sdk-python.git@ba87a7dbd29862149c077ff852f54786b6f885f5",
+]
+
+[project.scripts]
+yicloud = "yicloud_cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "requests-mock>=1.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yicloud_cli"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.uv]
+default-groups = ["dev"]
