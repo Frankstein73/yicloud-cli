@@ -12,8 +12,10 @@ from urllib.parse import urlparse
 import click
 import requests
 from yicloud.base.client import Client
+from yicloud.base.errs import YiCloudException
 
 from .auth import AuthenticationError, ClientConfig, build_client
+from .development_machines import COMMANDS as DEVELOPMENT_MACHINE_COMMANDS
 from .errors import ApiError, format_api_error, redact_sensitive
 from .output import OutputFormat, OutputWriter
 
@@ -68,13 +70,21 @@ class YiCloudGroup(click.Group):
     def invoke(self, ctx: click.Context) -> Any:
         try:
             return super().invoke(ctx)
-        except click.ClickException:
+        except (click.ClickException, click.exceptions.Exit, click.exceptions.Abort):
             raise
         except AuthenticationError as error:
             raise click.UsageError(str(error), ctx) from None
         except ApiError as error:
             environ = ctx.find_root().obj.environ if ctx.find_root().obj else os.environ
             raise click.ClickException(format_api_error(error, environ)) from None
+        except YiCloudException as error:
+            environ = ctx.find_root().obj.environ if ctx.find_root().obj else os.environ
+            api_error = ApiError(
+                message=getattr(error, "message", str(error)),
+                code=getattr(error, "code", None),
+                status=getattr(error, "status_code", None),
+            )
+            raise click.ClickException(format_api_error(api_error, environ)) from None
         except requests.RequestException as error:
             environ = ctx.find_root().obj.environ if ctx.find_root().obj else os.environ
             message = redact_sensitive(error, environ)
@@ -92,7 +102,7 @@ def _namespace_group(name: str, help_text: str) -> click.Group:
 def create_cli(
     *,
     custom_task_commands: Sequence[click.Command] = (),
-    development_machine_commands: Sequence[click.Command] = (),
+    development_machine_commands: Sequence[click.Command] | None = None,
     client_factory: ClientFactory = build_client,
     environ: Mapping[str, str] | None = None,
 ) -> click.Group:
@@ -155,7 +165,12 @@ def create_cli(
         "development-machine",
         "Manage YiCloud development machines.",
     )
-    for command in development_machine_commands:
+    commands = (
+        DEVELOPMENT_MACHINE_COMMANDS
+        if development_machine_commands is None
+        else development_machine_commands
+    )
+    for command in commands:
         development_machines.add_command(command)
     application.add_command(development_machines)
     return application

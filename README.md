@@ -61,9 +61,43 @@ The endpoint, profile, and output format can also be set with `YICLOUD_ENDPOINT`
 from `Access_Key_ID` and `Secret_Access_Key`; help and version commands do not require them.
 Credential values are never included in normal CLI output or presented exception messages.
 
-Resource-specific operations will be added under the `custom-task` and
-`development-machine` command groups. Both groups already appear in top-level help so new
-commands have stable, discoverable extension points.
+Development machines are managed through the `development-machine` group. Every API command
+requires a project namespace; global options such as `--output json` must come before the
+resource group:
+
+```shell
+# Create from an existing development environment.
+uv run yicloud development-machine create \
+  --project my-project \
+  --environment-id env-123 \
+  --name interactive-dev \
+  --lifecycle-minutes 120
+
+# Or create directly from an image and explicit resources.
+uv run yicloud development-machine create \
+  --project my-project \
+  --image-ref team/dev-image:latest \
+  --cpu 2 \
+  --memory 4Gi \
+  --env MODE=development \
+  --port 8080:http:web
+
+uv run yicloud development-machine list --project my-project --run-state running
+uv run yicloud --output json development-machine inspect --project my-project sandbox-123
+uv run yicloud development-machine update-lifecycle \
+  --project my-project sandbox-123 --mode extend --minutes 60
+uv run yicloud development-machine stop --project my-project sandbox-123
+uv run yicloud development-machine delete --project my-project sandbox-123
+uv run yicloud development-machine batch-delete \
+  --project my-project sandbox-123 sandbox-456
+```
+
+Run `uv run yicloud development-machine COMMAND --help` for all create inputs and list
+filters. The pinned OpenAPI SDK exposes create, list, inspect, stop, delete, batch-delete,
+and lifecycle-update operations for individual machines. It does not expose start or restart
+endpoints, so the CLI does not advertise commands that it cannot implement safely. Sandbox
+environment, prewarm-pool, and environment-statistics endpoints manage reusable templates and
+pools rather than individual development machines and are not mapped into this command group.
 
 ## Contributing
 
