@@ -1,0 +1,23 @@
+# Operating-system files
+.DS_Store
+Thumbs.db
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local configuration and secrets
+.env
+.env.*
+*.local
+
+# Build and test artifacts
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
