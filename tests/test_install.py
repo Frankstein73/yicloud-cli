@@ -10,7 +10,6 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_PATH = "/usr/local/bin:/usr/bin:/bin"
-ZSH_PATH = shutil.which("zsh")
 
 
 @pytest.fixture
@@ -87,6 +86,36 @@ if [[ ${1-} == sync ]]; then
     /bin/chmod +x "$UV_PROJECT_ENVIRONMENT/bin/yicloud"
     exit 0
 fi
+if [[ ${1-} == tool && ${2-} == update-shell ]]; then
+    bin_directory=${UV_TOOL_BIN_DIR:-$HOME/.local/bin}
+    case ${SHELL##*/} in
+        bash)
+            for profile in "$HOME/.bash_profile" "$HOME/.bashrc"; do
+                line=$(/usr/bin/printf 'export PATH="%s:$PATH"' "$bin_directory")
+                if [[ ! -f $profile ]] || ! /usr/bin/grep -Fqx "$line" "$profile"; then
+                    /usr/bin/printf '# uv\n%s\n' "$line" >> "$profile"
+                fi
+            done
+            ;;
+        zsh)
+            profile=${ZDOTDIR:-$HOME}/.zshenv
+            line=$(/usr/bin/printf 'export PATH="%s:$PATH"' "$bin_directory")
+            if [[ ! -f $profile ]] || ! /usr/bin/grep -Fqx "$line" "$profile"; then
+                /usr/bin/printf '# uv\n%s\n' "$line" >> "$profile"
+            fi
+            ;;
+        fish)
+            profile=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish
+            /bin/mkdir -p "${profile%/*}"
+            line=$(/usr/bin/printf 'fish_add_path "%s"' "$bin_directory")
+            if [[ ! -f $profile ]] || ! /usr/bin/grep -Fqx "$line" "$profile"; then
+                /usr/bin/printf '# uv\n%s\n' "$line" >> "$profile"
+            fi
+            ;;
+        *) exit 2 ;;
+    esac
+    exit 0
+fi
 exit 64
 """,
         )
@@ -126,6 +155,7 @@ def installer_environment(
     return {
         "HOME": str(home),
         "ZDOTDIR": str(home),
+        "SHELL": "/bin/bash",
         "PATH": f"{executable_directory}:{SYSTEM_PATH}",
         "FAKE_UV_LOG": str(tmp_path / "uv.log"),
         "FAKE_CURL_LOG": str(tmp_path / "curl.log"),
@@ -163,18 +193,18 @@ def run_stdin_installer(
     )
 
 
-def assert_fresh_zsh_can_invoke(home: Path, cwd: Path) -> None:
-    assert ZSH_PATH is not None, "zsh is required for the installer end-to-end test"
+def assert_fresh_shell_can_invoke(home: Path, cwd: Path, shell_path: str) -> None:
     result = subprocess.run(
         [
-            ZSH_PATH,
-            "-ic",
+            shell_path,
+            "-lic",
             "command -v yicloud && yicloud --help && yicloud --version",
         ],
         cwd=cwd,
         env={
             "HOME": str(home),
             "ZDOTDIR": str(home),
+            "SHELL": shell_path,
             "PATH": SYSTEM_PATH,
         },
         capture_output=True,
@@ -187,12 +217,23 @@ def assert_fresh_zsh_can_invoke(home: Path, cwd: Path) -> None:
     assert "yicloud, version 0.1.0" in result.stdout
 
 
-def test_successful_checkout_install_is_global_in_fresh_zsh(
-    installation_checkout: Path, tmp_path: Path
+@pytest.mark.parametrize(
+    "shell_path",
+    [
+        "/bin/bash",
+        pytest.param(
+            shutil.which("zsh") or "zsh",
+            marks=pytest.mark.skipif(shutil.which("zsh") is None, reason="zsh unavailable"),
+        ),
+    ],
+)
+def test_successful_checkout_install_is_global_in_detected_shell(
+    installation_checkout: Path, tmp_path: Path, shell_path: str
 ) -> None:
     environment = installer_environment(
         tmp_path,
         fake_tools(tmp_path),
+        SHELL=shell_path,
         Access_Key_ID="installer-access-key-sentinel",
         Secret_Access_Key="installer-secret-key-sentinel",
     )
@@ -211,15 +252,16 @@ def test_successful_checkout_install_is_global_in_fresh_zsh(
     assert (home / ".local/bin/yicloud").resolve() == (
         install_root / ".venv/bin/yicloud"
     )
-    assert_fresh_zsh_can_invoke(home, tmp_path)
+    assert_fresh_shell_can_invoke(home, tmp_path, shell_path)
 
     uv_log = Path(environment["FAKE_UV_LOG"]).read_text(encoding="utf-8")
     assert "python find >=3.11 --no-python-downloads" in uv_log
     assert "sync --locked --no-dev --python /fake/python3.11" in uv_log
+    assert "tool update-shell" in uv_log
     assert str(install_root) in uv_log
 
 
-def test_stdin_install_downloads_snapshot_and_is_global_in_fresh_zsh(
+def test_stdin_install_downloads_snapshot_and_is_global_in_fresh_bash(
     installation_checkout: Path,
     source_archive: Path,
     tmp_path: Path,
@@ -240,7 +282,9 @@ def test_stdin_install_downloads_snapshot_and_is_global_in_fresh_zsh(
     assert "Downloading yicloud-cli" in result.stdout
     assert "Installation complete" in result.stdout
     assert Path(environment["FAKE_CURL_LOG"]).read_text(encoding="utf-8")
-    assert_fresh_zsh_can_invoke(Path(environment["HOME"]), outside_checkout)
+    assert_fresh_shell_can_invoke(
+        Path(environment["HOME"]), outside_checkout, environment["SHELL"]
+    )
 
 
 def test_missing_uv_has_an_actionable_error(
@@ -272,12 +316,15 @@ def test_repeat_install_refreshes_managed_files_and_keeps_path_idempotent(
     assert installed_readme.read_text(encoding="utf-8") == (
         installation_checkout / "README.md"
     ).read_text(encoding="utf-8")
-    zshrc = (Path(environment["HOME"]) / ".zshrc").read_text(encoding="utf-8")
-    assert zshrc.count("# >>> yicloud-cli >>>") == 1
-    assert zshrc.count("export PATH=") == 1
+    bashrc = (Path(environment["HOME"]) / ".bashrc").read_text(encoding="utf-8")
+    assert bashrc.count("# uv") == 1
+    assert bashrc.count("export PATH=") == 1
     uv_log = Path(environment["FAKE_UV_LOG"]).read_text(encoding="utf-8")
     assert uv_log.count("sync --locked --no-dev") == 2
-    assert_fresh_zsh_can_invoke(Path(environment["HOME"]), tmp_path)
+    assert uv_log.count("tool update-shell") == 2
+    assert_fresh_shell_can_invoke(
+        Path(environment["HOME"]), tmp_path, environment["SHELL"]
+    )
 
 
 def test_sync_failure_propagates_and_preserves_previous_install(
@@ -297,7 +344,9 @@ def test_sync_failure_propagates_and_preserves_previous_install(
     assert failed.returncode == 23
     assert "Installation complete" not in failed.stdout
     assert "locked dependency synchronization failed" in failed.stderr
-    assert_fresh_zsh_can_invoke(Path(environment["HOME"]), tmp_path)
+    assert_fresh_shell_can_invoke(
+        Path(environment["HOME"]), tmp_path, environment["SHELL"]
+    )
 
 
 def test_missing_supported_python_has_an_actionable_error(
@@ -316,13 +365,19 @@ def test_missing_supported_python_has_an_actionable_error(
     assert "uv python install 3.11" in result.stderr
 
 
-def test_uninstall_removes_only_managed_files_and_path_block(
+def test_uninstall_removes_managed_files_and_legacy_path_block_only(
     installation_checkout: Path, tmp_path: Path
 ) -> None:
     environment = installer_environment(tmp_path, fake_tools(tmp_path))
     home = Path(environment["HOME"])
     zshrc = home / ".zshrc"
-    zshrc.write_text("export KEEP_ME=yes\n", encoding="utf-8")
+    zshrc.write_text(
+        "export KEEP_ME=yes\n"
+        "# >>> yicloud-cli >>>\n"
+        'export PATH="/legacy/.local/bin:$PATH"\n'
+        "# <<< yicloud-cli <<<\n",
+        encoding="utf-8",
+    )
     installed = run_checkout_installer(installation_checkout, environment)
     assert installed.returncode == 0
 
@@ -342,3 +397,72 @@ def test_uninstall_removes_only_managed_files_and_path_block(
     assert not (home / ".local/bin/yicloud").exists()
     assert unrelated.read_text(encoding="utf-8") == "keep"
     assert zshrc.read_text(encoding="utf-8").strip() == "export KEEP_ME=yes"
+    assert "# uv" in (home / ".bashrc").read_text(encoding="utf-8")
+
+
+def test_unknown_shell_keeps_install_and_prints_manual_path_guidance(
+    installation_checkout: Path, tmp_path: Path
+) -> None:
+    environment = installer_environment(
+        tmp_path,
+        fake_tools(tmp_path),
+        SHELL="/bin/unknown-shell",
+    )
+
+    result = run_checkout_installer(installation_checkout, environment)
+
+    assert result.returncode == 0, result.stderr
+    assert "shell PATH could not be updated automatically" in result.stdout
+    assert "Add " in result.stdout and " to PATH" in result.stdout
+    cli = Path(environment["HOME"]) / ".local/bin/yicloud"
+    direct = subprocess.run(
+        [str(cli), "--help"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert direct.returncode == 0
+    assert "Usage: yicloud" in direct.stdout
+
+
+def test_fish_path_configuration_uses_fish_add_path(
+    installation_checkout: Path, tmp_path: Path
+) -> None:
+    environment = installer_environment(
+        tmp_path,
+        fake_tools(tmp_path),
+        SHELL="/usr/bin/fish",
+        XDG_CONFIG_HOME=str(tmp_path / "home/.config"),
+    )
+
+    result = run_checkout_installer(installation_checkout, environment)
+
+    assert result.returncode == 0, result.stderr
+    fish_config = Path(environment["XDG_CONFIG_HOME"]) / "fish/config.fish"
+    assert (
+        f'fish_add_path "{environment["HOME"]}/.local/bin"'
+        in fish_config.read_text(encoding="utf-8")
+    )
+
+
+def test_reinstall_migrates_legacy_zsh_block_to_detected_shell(
+    installation_checkout: Path, tmp_path: Path
+) -> None:
+    environment = installer_environment(tmp_path, fake_tools(tmp_path))
+    home = Path(environment["HOME"])
+    zshrc = home / ".zshrc"
+    zshrc.write_text(
+        "export KEEP_ME=yes\n"
+        "# >>> yicloud-cli >>>\n"
+        'export PATH="/legacy/.local/bin:$PATH"\n'
+        "# <<< yicloud-cli <<<\n",
+        encoding="utf-8",
+    )
+
+    result = run_checkout_installer(installation_checkout, environment)
+
+    assert result.returncode == 0, result.stderr
+    assert "Migrated the legacy yicloud-cli Zsh PATH block" in result.stdout
+    assert zshrc.read_text(encoding="utf-8").strip() == "export KEEP_ME=yes"
+    assert "# uv" in (home / ".bashrc").read_text(encoding="utf-8")

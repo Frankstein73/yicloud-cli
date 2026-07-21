@@ -7,9 +7,9 @@ development machines from a terminal or automation workflow. It uses the
 ## Prerequisites
 
 - Linux or macOS. Windows users can use a Linux environment such as WSL 2.
-- Bash 3.2 or newer to run `install.sh`.
-- Zsh for the documented automatic PATH setup. The installed command also works
-  in Bash and other shells when `~/.local/bin` is on `PATH`.
+- Bash 3.2 or newer to execute the installer. Your interactive shell does not
+  need to be Bash; the installed CLI works from Bash, Zsh, Fish, and other
+  shells when its bin directory is on `PATH`.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) available on
   `PATH`.
 - Python 3.11 or newer installed locally or through uv. The installer does not
@@ -22,9 +22,15 @@ development machines from a terminal or automation workflow. It uses the
 You do not need YiCloud credentials to install the project or display help and
 version output.
 
-## Installation
+## Quick install
 
-Install the current release directly from Zsh or another terminal:
+If uv is not installed yet:
+
+```shell
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Install the current yicloud-cli snapshot:
 
 ```shell
 curl -fsSL https://raw.githubusercontent.com/Frankstein73/yicloud-cli/main/install.sh | bash
@@ -32,25 +38,19 @@ curl -fsSL https://raw.githubusercontent.com/Frankstein73/yicloud-cli/main/insta
 
 The installer downloads the project snapshot, creates a persistent locked
 environment in `~/.local/share/yicloud-cli`, and links the command at
-`~/.local/bin/yicloud`. It adds this idempotent block to the active Zsh
-configuration file (`${ZDOTDIR:-$HOME}/.zshrc` by default):
+`~/.local/bin/yicloud`. When that bin directory is not already on `PATH`, it
+uses `uv tool update-shell` to update the configuration for the detected shell.
+Open a new terminal after installation, then verify the command:
 
 ```shell
-# >>> yicloud-cli >>>
-export PATH="/absolute/path/to/.local/bin:$PATH"
-# <<< yicloud-cli <<<
-```
-
-Open a new Zsh session, or load the change once in the current session:
-
-```shell
-source "${ZDOTDIR:-$HOME}/.zshrc"
 yicloud --help
 yicloud --version
 ```
 
-The command now works from any directory without `uv run`, changing into a
-source checkout, or activating a virtual environment.
+The installation command is piped to Bash only because `install.sh` is a Bash
+script; it does not make Bash the required interactive shell. Once installed,
+`yicloud` works from any directory without `uv run`, changing into a source
+checkout, or activating a virtual environment.
 
 ### Installation from a checkout
 
@@ -90,8 +90,9 @@ curl -fsSL https://raw.githubusercontent.com/Frankstein73/yicloud-cli/main/insta
 
 From an updated checkout, `./install.sh` performs the same refresh. A failed
 download or dependency synchronization restores the previous usable
-installation. The Zsh PATH block and command link are reused rather than
-duplicated.
+installation. The command link and shell PATH configuration are reused rather
+than duplicated. Reinstalling also migrates the PATH block written to `.zshrc`
+by older yicloud-cli installers to the shell-neutral setup.
 
 ### Uninstall
 
@@ -102,11 +103,13 @@ bash "$HOME/.local/share/yicloud-cli/install.sh" --uninstall
 ```
 
 This removes only the managed `~/.local/share/yicloud-cli` installation, the
-managed `~/.local/bin/yicloud` symbolic link, and the marked yicloud-cli PATH
-block in the Zsh configuration file. It does not remove source checkouts,
-credentials, unrelated files in `~/.local`, or shared uv caches. Custom
-locations set with `YICLOUD_INSTALL_ROOT`, `YICLOUD_BIN_DIR`, or
-`YICLOUD_ZSH_CONFIG` must be supplied again when uninstalling.
+managed `~/.local/bin/yicloud` symbolic link, and any legacy yicloud-cli PATH
+block written by an older installer. It does not remove source checkouts,
+credentials, unrelated files in `~/.local`, shared uv caches, or PATH entries
+managed by uv because other uv-installed tools may use them. Custom locations
+set with `YICLOUD_INSTALL_ROOT` or `YICLOUD_BIN_DIR` must be supplied again when
+uninstalling. `YICLOUD_ZSH_CONFIG` is accepted only to clean up a legacy PATH
+block from an older installation.
 
 ## Authentication
 
@@ -227,10 +230,25 @@ the CLI does not advertise them. Run
 
 ### `yicloud` is not found after installation
 
-Open a new Zsh session or run `source "${ZDOTDIR:-$HOME}/.zshrc"`. Confirm that
-`~/.local/bin` appears in `print -r -- $path` and that
-`~/.local/bin/yicloud` is a symbolic link. If a custom `YICLOUD_BIN_DIR` or
-`YICLOUD_ZSH_CONFIG` was used, inspect that directory or file instead.
+Open a new terminal and confirm that the command link exists and the bin
+directory is on `PATH`:
+
+```shell
+ls -l "$HOME/.local/bin/yicloud"
+command -v yicloud
+```
+
+For the current Bash, Zsh, or POSIX-style shell session, add the default bin
+directory temporarily with:
+
+```shell
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Fish users can run `fish_add_path ~/.local/bin`. To make the change persistent,
+rerun `uv tool update-shell`, or add the equivalent command to the startup file
+used by your shell. If `YICLOUD_BIN_DIR` was set during installation, use that
+directory instead of `~/.local/bin`.
 
 ### Credentials are missing
 
