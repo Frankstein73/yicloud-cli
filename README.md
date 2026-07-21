@@ -7,48 +7,67 @@ development machines from a terminal or automation workflow. It uses the
 ## Prerequisites
 
 - Linux or macOS. Windows users can use a Linux environment such as WSL 2.
-- Bash 3.2 or newer for `install.sh`. The installed CLI can be run from Bash,
-  Zsh, or another shell that can execute a program from the project directory.
+- Bash 3.2 or newer to run `install.sh`.
+- Zsh for the documented automatic PATH setup. The installed command also works
+  in Bash and other shells when `~/.local/bin` is on `PATH`.
 - [uv](https://docs.astral.sh/uv/getting-started/installation/) available on
   `PATH`.
 - Python 3.11 or newer installed locally or through uv. The installer does not
   download Python automatically; `uv python install 3.11` can prepare it first.
 - Git and network access to fetch the YiCloud SDK dependency pinned in
   `uv.lock`.
+- `curl` and `tar` for the one-line remote installation. A checkout installation
+  also needs `tar`.
 
 You do not need YiCloud credentials to install the project or display help and
 version output.
 
 ## Installation
 
-From a fresh checkout, run the repository installer:
+Install the current release directly from Zsh or another terminal:
+
+```shell
+curl -fsSL https://raw.githubusercontent.com/Frankstein73/yicloud-cli/main/install.sh | bash
+```
+
+The installer downloads the project snapshot, creates a persistent locked
+environment in `~/.local/share/yicloud-cli`, and links the command at
+`~/.local/bin/yicloud`. It adds this idempotent block to the active Zsh
+configuration file (`${ZDOTDIR:-$HOME}/.zshrc` by default):
+
+```shell
+# >>> yicloud-cli >>>
+export PATH="/absolute/path/to/.local/bin:$PATH"
+# <<< yicloud-cli <<<
+```
+
+Open a new Zsh session, or load the change once in the current session:
+
+```shell
+source "${ZDOTDIR:-$HOME}/.zshrc"
+yicloud --help
+yicloud --version
+```
+
+The command now works from any directory without `uv run`, changing into a
+source checkout, or activating a virtual environment.
+
+### Installation from a checkout
+
+From a fresh checkout, prepare the same persistent user-level installation:
 
 ```shell
 ./install.sh
 ```
 
-The script checks its prerequisites, creates or updates the project-local
-`.venv`, synchronizes the exact locked runtime dependencies, and verifies the
-installed `yicloud` entry point. It can be run repeatedly. It does not inspect
-or store YiCloud credentials.
+Both installation forms check prerequisites, acquire a complete project
+snapshot, synchronize its exact locked runtime dependencies with a
+project-level uv command, and verify the `yicloud` entry point. They do not
+inspect or store YiCloud credentials.
 
-Run the installed command directly:
+### Manual development installation
 
-```shell
-.venv/bin/yicloud --help
-.venv/bin/yicloud --version
-```
-
-Or let uv run the same project entry point:
-
-```shell
-uv run --locked --no-dev yicloud --help
-uv run --locked --no-dev yicloud --version
-```
-
-### Manual installation
-
-The equivalent project-level workflow is:
+For development or a deliberately checkout-local environment, use:
 
 ```shell
 uv python find '>=3.11' --no-python-downloads
@@ -57,36 +76,37 @@ uv run --locked --no-dev yicloud --version
 ```
 
 `--locked` makes synchronization fail instead of silently changing the
-committed `uv.lock`.
+committed `uv.lock`. This manual workflow does not create the persistent global
+`yicloud` command.
 
 ### Upgrade or reinstall
 
-To upgrade to a newer checkout while retaining locked, reproducible
-dependencies:
+Rerun the one-line installer to download the current `main` snapshot and
+atomically refresh the managed installation:
 
 ```shell
-git pull --ff-only
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/Frankstein73/yicloud-cli/main/install.sh | bash
 ```
 
-Running `./install.sh` again is also the normal repair/reinstall operation. To
-force uv to reinstall every locked runtime package in the existing project
-environment, run:
+From an updated checkout, `./install.sh` performs the same refresh. A failed
+download or dependency synchronization restores the previous usable
+installation. The Zsh PATH block and command link are reused rather than
+duplicated.
+
+### Uninstall
+
+Run the managed installer copy with its uninstall flag:
 
 ```shell
-UV_PROJECT_ENVIRONMENT="$PWD/.venv" uv sync --locked --no-dev --reinstall
+bash "$HOME/.local/share/yicloud-cli/install.sh" --uninstall
 ```
 
-### Uninstall or clean up
-
-Installation creates only the `.venv` directory inside this checkout. Remove
-that project-owned environment to uninstall the prepared CLI:
-
-```shell
-rm -rf -- .venv
-```
-
-This does not remove the source checkout, credentials, or shared uv caches.
+This removes only the managed `~/.local/share/yicloud-cli` installation, the
+managed `~/.local/bin/yicloud` symbolic link, and the marked yicloud-cli PATH
+block in the Zsh configuration file. It does not remove source checkouts,
+credentials, unrelated files in `~/.local`, or shared uv caches. Custom
+locations set with `YICLOUD_INSTALL_ROOT`, `YICLOUD_BIN_DIR`, or
+`YICLOUD_ZSH_CONFIG` must be supplied again when uninstalling.
 
 ## Authentication
 
@@ -99,15 +119,16 @@ export Secret_Access_Key='your-secret-access-key'
 ```
 
 Use your shell or CI system's secret manager for persistent configuration. Do
-not commit credentials to the repository. Help and version commands do not
-read these variables.
+not commit credentials to the repository. Help and version commands do not read
+these variables, and installation explicitly removes them from child-process
+environments.
 
 The endpoint, profile name, and output format can optionally be configured with
 `YICLOUD_ENDPOINT`, `YICLOUD_PROFILE`, and `YICLOUD_OUTPUT`. Global options must
 come before the resource command:
 
 ```shell
-.venv/bin/yicloud \
+yicloud \
   --endpoint https://gate.yicloud.com \
   --profile default \
   --output json \
@@ -119,9 +140,9 @@ come before the resource command:
 Start with command discovery, which does not contact YiCloud:
 
 ```shell
-.venv/bin/yicloud --help
-.venv/bin/yicloud custom-task --help
-.venv/bin/yicloud development-machine --help
+yicloud --help
+yicloud custom-task --help
+yicloud development-machine --help
 ```
 
 The following API examples require valid credentials, a reachable endpoint,
@@ -134,23 +155,23 @@ supplied as `NAME=JSON`; `image`, `command`, and `replicas` are required, while
 `env` defaults to an empty object.
 
 ```shell
-.venv/bin/yicloud custom-task create \
+yicloud custom-task create \
   --project demo \
   --name training-run \
   --task-spec 'worker={"image":"registry.example/train:1","command":["python","train.py"],"replicas":1,"env":{"MODE":"train"}}'
 
-.venv/bin/yicloud custom-task list --project demo --phase Running --limit 25
-.venv/bin/yicloud --output json custom-task inspect task-123 --project demo
-.venv/bin/yicloud custom-task update task-123 --project demo --priority 7
-.venv/bin/yicloud custom-task update task-123 --project demo --top
-.venv/bin/yicloud custom-task cancel task-123 task-456 --project demo
-.venv/bin/yicloud custom-task clone task-123 --project demo --target-name rerun
-.venv/bin/yicloud custom-task delete task-123 --project demo --yes
+yicloud custom-task list --project demo --phase Running --limit 25
+yicloud --output json custom-task inspect task-123 --project demo
+yicloud custom-task update task-123 --project demo --priority 7
+yicloud custom-task update task-123 --project demo --top
+yicloud custom-task cancel task-123 task-456 --project demo
+yicloud custom-task clone task-123 --project demo --target-name rerun
+yicloud custom-task delete task-123 --project demo --yes
 ```
 
-The API does not expose a retry action; use `clone` to create a new task from
-an existing one. Run `.venv/bin/yicloud custom-task COMMAND --help` for all
-supported filters and options.
+The API does not expose a retry action; use `clone` to create a new task from an
+existing one. Run `yicloud custom-task COMMAND --help` for all supported filters
+and options.
 
 ### Development machines
 
@@ -158,14 +179,14 @@ Every development-machine API command requires a project namespace.
 
 ```shell
 # Create from an existing development environment.
-.venv/bin/yicloud development-machine create \
+yicloud development-machine create \
   --project my-project \
   --environment-id env-123 \
   --name interactive-dev \
   --lifecycle-minutes 120
 
 # Or create directly from an image and explicit resources.
-.venv/bin/yicloud development-machine create \
+yicloud development-machine create \
   --project my-project \
   --image-ref team/dev-image:latest \
   --cpu 2 \
@@ -173,34 +194,43 @@ Every development-machine API command requires a project namespace.
   --env MODE=development \
   --port 8080:http:web
 
-.venv/bin/yicloud development-machine list --project my-project --run-state running
-.venv/bin/yicloud --output json development-machine inspect --project my-project sandbox-123
-.venv/bin/yicloud development-machine update-lifecycle \
+yicloud development-machine list --project my-project --run-state running
+yicloud --output json development-machine inspect --project my-project sandbox-123
+yicloud development-machine update-lifecycle \
   --project my-project sandbox-123 --mode extend --minutes 60
-.venv/bin/yicloud development-machine stop --project my-project sandbox-123
-.venv/bin/yicloud development-machine delete --project my-project sandbox-123
-.venv/bin/yicloud development-machine batch-delete \
+yicloud development-machine stop --project my-project sandbox-123
+yicloud development-machine delete --project my-project sandbox-123
+yicloud development-machine batch-delete \
   --project my-project sandbox-123 sandbox-456
 ```
 
 The pinned SDK exposes create, list, inspect, stop, delete, batch-delete, and
 lifecycle-update operations. It does not expose start or restart endpoints, so
 the CLI does not advertise them. Run
-`.venv/bin/yicloud development-machine COMMAND --help` for all inputs and
-filters.
+`yicloud development-machine COMMAND --help` for all inputs and filters.
 
 ## Troubleshooting
 
 ### A prerequisite is missing
 
-- `uv was not found on PATH`: install uv using its official instructions,
-  start a new shell if needed, confirm `uv --version`, and rerun the installer.
+- `uv was not found on PATH`: install uv using its official instructions, open
+  a new shell if needed, confirm `uv --version`, and rerun the installer.
 - `git was not found on PATH`: install Git and confirm `git --version`.
 - `Python 3.11 or newer is unavailable`: install a supported interpreter with
   your platform tools or `uv python install 3.11`, then confirm it with
   `uv python find '>=3.11' --no-python-downloads`.
+- `curl` or `tar` is missing: install the named system tool. You can avoid the
+  remote download by using a checkout, but checkout installation still needs
+  `tar`.
 - `Permission denied` for `./install.sh`: restore the executable checkout bit
   with `chmod +x install.sh`, then rerun it.
+
+### `yicloud` is not found after installation
+
+Open a new Zsh session or run `source "${ZDOTDIR:-$HOME}/.zshrc"`. Confirm that
+`~/.local/bin` appears in `print -r -- $path` and that
+`~/.local/bin/yicloud` is a symbolic link. If a custom `YICLOUD_BIN_DIR` or
+`YICLOUD_ZSH_CONFIG` was used, inspect that directory or file instead.
 
 ### Credentials are missing
 
@@ -214,12 +244,14 @@ test -n "${Access_Key_ID:-}" && test -n "${Secret_Access_Key:-}" && echo 'creden
 
 ### Locked dependency synchronization fails
 
-Confirm that `pyproject.toml` and `uv.lock` are present and unchanged with
-`git status --short -- pyproject.toml uv.lock`. Then check network access to the
-package index and the pinned YiCloud SDK Git repository. `uv sync --locked
---no-dev -v` provides detailed resolver diagnostics without involving cloud
-credentials. A lock mismatch must be resolved in source control; the installer
-will not rewrite the lockfile.
+For a checkout install, confirm that `pyproject.toml` and `uv.lock` are present
+and unchanged with `git status --short -- pyproject.toml uv.lock`. For a remote
+install, confirm access to GitHub's raw-content and archive hosts. Then check
+network access to the package index and the pinned YiCloud SDK Git repository.
+Running the manual `uv sync --locked --no-dev -v` workflow in a checkout
+provides detailed resolver diagnostics without involving cloud credentials. A
+lock mismatch must be resolved in source control; the installer never rewrites
+the lockfile.
 
 ### The API rejects a command
 
