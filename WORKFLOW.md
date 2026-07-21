@@ -25,7 +25,7 @@ agent:
   max_concurrent_agents: 1
   max_turns: 64
 codex:
-  command: codex --config 'model="gpt-5.6-terra"' --config model_reasoning_effort=high app-server
+  command: codex --config 'model="gpt-5.6-sol"' --config model_reasoning_effort=high app-server
   approval_policy: never
   thread_sandbox: danger-full-access
   turn_sandbox_policy:
