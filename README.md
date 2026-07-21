@@ -61,9 +61,39 @@ The endpoint, profile, and output format can also be set with `YICLOUD_ENDPOINT`
 from `Access_Key_ID` and `Secret_Access_Key`; help and version commands do not require them.
 Credential values are never included in normal CLI output or presented exception messages.
 
-Resource-specific operations will be added under the `custom-task` and
-`development-machine` command groups. Both groups already appear in top-level help so new
-commands have stable, discoverable extension points.
+### Custom tasks
+
+Custom tasks use the OpenAPI `job/v1alpha1` service. A task specification is supplied as
+`NAME=JSON`; its required fields are `image`, `command`, and `replicas`, while `env`
+defaults to an empty object. For example:
+
+```shell
+uv run yicloud custom-task create \
+  --project demo \
+  --name training-run \
+  --task-spec 'worker={"image":"registry.example/train:1","command":["python","train.py"],"replicas":1,"env":{"MODE":"train"}}'
+
+uv run yicloud custom-task list --project demo --phase Running --limit 25
+uv run yicloud --output json custom-task inspect task-123 --project demo
+```
+
+The remaining lifecycle operations exposed by the OpenAPI are available with consistent
+task identifiers and project options:
+
+```shell
+uv run yicloud custom-task update task-123 --project demo --priority 7
+uv run yicloud custom-task update task-123 --project demo --top
+uv run yicloud custom-task cancel task-123 task-456 --project demo
+uv run yicloud custom-task clone task-123 --project demo --target-name rerun
+uv run yicloud custom-task delete task-123 --project demo --yes
+```
+
+The API does not expose a retry action. Use `clone` to create a new task from an existing
+one. Job replica, process, and log endpoints are observability/subresource APIs rather than
+custom-task lifecycle operations and are outside this command group's lifecycle scope.
+
+Run `uv run yicloud custom-task COMMAND --help` for all supported filters and options.
+The `development-machine` group remains a stable extension point for its resource commands.
 
 ## Contributing
 
