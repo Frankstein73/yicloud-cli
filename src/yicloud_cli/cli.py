@@ -190,7 +190,7 @@ def create_cli(
 
     development_machines = _namespace_group(
         "development-machine",
-        "Read YiCloud Workspace development machines.",
+        "Manage YiCloud Workspace development machines.",
     )
     commands = (
         DEVELOPMENT_MACHINE_COMMANDS
@@ -201,7 +201,8 @@ def create_cli(
         development_machines.add_command(command)
     if development_machine_commands is None:
         for command in LEGACY_DEVELOPMENT_MACHINE_COMMANDS:
-            development_machines.add_command(command)
+            if command.name not in development_machines.commands:
+                development_machines.add_command(command)
     application.add_command(development_machines)
 
     sandboxes = _namespace_group(
