@@ -1,21 +1,23 @@
-"""Development-machine commands backed by the YiCloud sandbox OpenAPI."""
+"""Development-machine reads backed by the YiCloud Workspace OpenAPI."""
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
 from typing import Any
 
 import click
-from yicloud.services import sandbox
-from yicloud.services.sandbox import models
+from yicloud.services import workspace
+from yicloud.services.workspace import models
 
 from .output import OutputFormat
 
 
-_RFC3339_SUFFIX = re.compile(r"(?:Z|[+-]\d{2}:\d{2})$")
+class _CommaSeparatedQueryValues(list[str]):
+    """Keep SDK list semantics while producing its expected query representation."""
+
+    def __str__(self) -> str:
+        return ",".join(self)
 
 
 def _non_empty(value: str, label: str) -> str:
@@ -25,157 +27,23 @@ def _non_empty(value: str, label: str) -> str:
     return value
 
 
-def _rfc3339(
-    _ctx: click.Context, param: click.Parameter, value: str | None
-) -> str | None:
-    if value is None:
-        return None
-    if not _RFC3339_SUFFIX.search(value):
-        raise click.BadParameter(
-            "must be an RFC3339 timestamp with a timezone", param=param
-        )
-    try:
-        datetime.fromisoformat(
-            value.removesuffix("Z") + ("+00:00" if value.endswith("Z") else "")
-        )
-    except ValueError:
-        raise click.BadParameter(
-            "must be a valid RFC3339 timestamp", param=param
-        ) from None
-    return value
+def _optional_text(value: str | None, label: str) -> str | None:
+    return _non_empty(value, label) if value is not None else None
 
 
-def _key_value(
+def _repeated_text(
     _ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
-) -> dict[str, str] | None:
+) -> list[str] | None:
     if not values:
         return None
-    result: dict[str, str] = {}
-    for value in values:
-        key, separator, item = value.partition("=")
-        if not separator or not key.strip():
-            raise click.BadParameter("must use KEY=VALUE", param=param)
-        key = key.strip()
-        if key in result:
-            raise click.BadParameter(f"contains duplicate key {key!r}", param=param)
-        result[key] = item
-    return result
-
-
-def _port(
-    _ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
-) -> list[models.CreateSandboxReqPort] | None:
-    if not values:
-        return None
-    ports = []
-    seen = set()
-    for value in values:
-        parts = value.split(":", 2)
-        try:
-            number = int(parts[0])
-        except ValueError:
-            raise click.BadParameter(
-                "must start with a numeric container port", param=param
-            ) from None
-        if not 1 <= number <= 65535:
-            raise click.BadParameter(
-                "container port must be between 1 and 65535", param=param
-            )
-        if number in seen:
-            raise click.BadParameter(
-                f"contains duplicate container port {number}", param=param
-            )
-        seen.add(number)
-        ports.append(
-            models.CreateSandboxReqPort(
-                ContainerPort=number,
-                Name=parts[1] or None if len(parts) > 1 else None,
-                Purpose=parts[2] or None if len(parts) > 2 else None,
-            )
-        )
-    return ports
-
-
-def _volume(
-    _ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
-) -> list[models.CreateSandboxReqVolume] | None:
-    if not values:
-        return None
-    volumes = []
-    for value in values:
-        try:
-            item = json.loads(value)
-        except json.JSONDecodeError as error:
-            raise click.BadParameter(
-                f"must be valid JSON: {error.msg}", param=param
-            ) from None
-        if not isinstance(item, dict) or not str(item.get("mount_path", "")).strip():
-            raise click.BadParameter(
-                "must be an object with a non-empty mount_path", param=param
-            )
-        source_names = [
-            name for name in ("host", "ossfs", "pvc") if item.get(name) is not None
-        ]
-        if len(source_names) != 1:
-            raise click.BadParameter(
-                "must define exactly one of host, ossfs, or pvc", param=param
-            )
-        allowed = {"mount_path", "name", "read_only", "sub_path", *source_names}
-        unknown = sorted(set(item) - allowed)
-        if unknown:
-            raise click.BadParameter(
-                f"contains unsupported field(s): {', '.join(unknown)}", param=param
-            )
-
-        host = ossfs = pvc = None
-        source = item[source_names[0]]
-        if not isinstance(source, dict):
-            raise click.BadParameter(
-                f"{source_names[0]} must be an object", param=param
-            )
-        if source_names[0] == "host":
-            if set(source) != {"path"} or not str(source.get("path", "")).strip():
-                raise click.BadParameter(
-                    "host must contain only a non-empty path", param=param
-                )
-            host = models.CreateSandboxReqVolumeHost(Path=source["path"])
-        elif source_names[0] == "ossfs":
-            if set(source) != {"bucket", "endpoint"} or not all(
-                str(source.get(key, "")).strip() for key in ("bucket", "endpoint")
-            ):
-                raise click.BadParameter(
-                    "ossfs must contain non-empty bucket and endpoint", param=param
-                )
-            ossfs = models.CreateSandboxReqVolumeOSSFS(
-                Bucket=source["bucket"], Endpoint=source["endpoint"]
-            )
-        else:
-            if (
-                set(source) != {"claim_name"}
-                or not str(source.get("claim_name", "")).strip()
-            ):
-                raise click.BadParameter(
-                    "pvc must contain only a non-empty claim_name", param=param
-                )
-            pvc = models.CreateSandboxReqVolumePVC(ClaimName=source["claim_name"])
-        if "read_only" in item and not isinstance(item["read_only"], bool):
-            raise click.BadParameter("read_only must be a JSON boolean", param=param)
-        volumes.append(
-            models.CreateSandboxReqVolume(
-                MountPath=item["mount_path"],
-                Host=host,
-                Ossfs=ossfs,
-                Pvc=pvc,
-                Name=item.get("name"),
-                ReadOnly=item.get("read_only"),
-                SubPath=item.get("sub_path"),
-            )
-        )
-    return volumes
+    return _CommaSeparatedQueryValues(
+        _non_empty(value, f"--{param.name.replace('_', '-')}") for value in values
+    )
 
 
 def _snake_case(name: str) -> str:
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+    name = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", name).lower()
 
 
 def _normalized(value: Any) -> Any:
@@ -188,405 +56,211 @@ def _normalized(value: Any) -> Any:
     return value
 
 
-def _strip(value: str | None, label: str) -> str | None:
-    return _non_empty(value, label) if value is not None else None
-
-
-def _comma_separated(value: str | None, label: str) -> str | None:
-    if value is None:
-        return None
-    items = [item.strip() for item in value.split(",")]
-    if not items or any(not item for item in items):
-        raise click.BadParameter(
-            "must be a comma-separated list of non-empty values", param_hint=label
-        )
-    return ",".join(items)
+def _workspace_view(value: Any) -> dict[str, Any]:
+    item = _normalized(value) or {}
+    return {
+        "workspace_id": item.get("workspace_id", ""),
+        "uid": item.get("uid", ""),
+        "project": item.get("project", ""),
+        "name": item.get("name", ""),
+        "phase": item.get("phase", ""),
+        "resources": {
+            "cpu": item.get("cpu", ""),
+            "memory": item.get("memory", ""),
+            "gpu": item.get("gpu", ""),
+            "worker_count": item.get("worker_count", 0),
+        },
+        "creator": {
+            "name": item.get("creator", ""),
+            "id": item.get("creator_id", ""),
+            "real_name": item.get("real_creator", ""),
+            "real_id": item.get("real_creator_id", ""),
+        },
+        "quota_group": item.get("quota_group", ""),
+        "sku": {
+            "id": item.get("sku_id", ""),
+            "pool_name": item.get("sku_pool_name", ""),
+            "pool_type": item.get("sku_pool_type", ""),
+            "resource_scope": item.get("sku_resource_scope", ""),
+            "public": item.get("sku_public", False),
+            "private": item.get("sku_private", False),
+            "project": item.get("sku_project", False),
+            "tenant": item.get("sku_tenant", False),
+        },
+        "timestamps": {
+            "created": item.get("creation_time", ""),
+            "updated": item.get("update_time", ""),
+            "started": item.get("start_timestamp", ""),
+            "stopped": item.get("stop_timestamp", ""),
+        },
+        "runtime_mode": item.get("runtime_mode", ""),
+        "image": item.get("image", ""),
+        "description": item.get("description", ""),
+        "use_private_machine": item.get("use_private_machine", False),
+    }
 
 
 def _invoke(context: Any, action: Any, request: Any) -> Any:
-    sandbox.use_client(context.client)
+    workspace.use_client(context.client)
     return action(None, request)
 
 
-def _write_machine(context: Any, value: Any) -> None:
-    context.write(_normalized(value))
-
-
-def _write_machine_list(context: Any, value: Any) -> None:
-    result = _normalized(value) or {}
-    if context.output_format is OutputFormat.JSON:
-        context.write(result)
-        return
-    rows = [
-        {
-            "id": item.get("id", ""),
-            "name": item.get("name", ""),
-            "state": item.get("run_state")
-            or (item.get("status") or {}).get("state", ""),
-            "type": item.get("type", ""),
-            "created_at": item.get("created_at", ""),
-            "expires_at": item.get("expires_at", ""),
-        }
-        for item in result.get("items") or []
-    ]
-    context.write(rows)
-
-
-_project_option = click.option(
-    "--project", "project_name", required=True, help="Project namespace."
-)
-
-
-@click.command("create")
-@_project_option
-@click.option("--name", help="Machine name.")
-@click.option("--environment-id", help="Existing development environment identifier.")
-@click.option("--image-ref", help="Image reference for a direct machine creation.")
-@click.option(
-    "--image-uri", help="Legacy full image URI for a direct machine creation."
-)
-@click.option("--image-username", help="Registry username associated with the image.")
-@click.option("--cpu", help="CPU request for a direct machine creation, for example 2.")
-@click.option(
-    "--memory", help="Memory request for a direct machine creation, for example 4Gi."
-)
-@click.option(
-    "--entrypoint",
-    multiple=True,
-    help="Entrypoint argument; repeat to preserve argument boundaries.",
-)
-@click.option(
-    "--env",
-    "environment",
-    multiple=True,
-    callback=_key_value,
-    metavar="KEY=VALUE",
-    help="Environment variable; repeatable.",
-)
-@click.option(
-    "--port",
-    "ports",
-    multiple=True,
-    callback=_port,
-    metavar="PORT[:NAME[:PURPOSE]]",
-    help="Exposed container port; repeatable.",
-)
-@click.option(
-    "--volume",
-    "volumes",
-    multiple=True,
-    callback=_volume,
-    metavar="JSON",
-    help="Volume JSON with mount_path and exactly one of host, ossfs, or pvc; repeatable.",
-)
-@click.option(
-    "--lifecycle-minutes",
-    type=click.IntRange(min=1),
-    help="Machine lifetime in minutes.",
-)
-@click.option(
-    "--request-timeout-seconds",
-    type=click.IntRange(min=1),
-    help="Per-request timeout in seconds.",
-)
-@click.pass_obj
-def create_machine(
-    context: Any,
-    project_name: str,
-    name: str | None,
-    environment_id: str | None,
-    image_ref: str | None,
-    image_uri: str | None,
-    image_username: str | None,
-    cpu: str | None,
-    memory: str | None,
-    entrypoint: tuple[str, ...],
-    environment: dict[str, str] | None,
-    ports: list[models.CreateSandboxReqPort] | None,
-    volumes: list[models.CreateSandboxReqVolume] | None,
-    lifecycle_minutes: int | None,
-    request_timeout_seconds: int | None,
+def _validate_range(
+    minimum: int | None,
+    maximum: int | None,
+    minimum_option: str,
+    maximum_option: str,
 ) -> None:
-    """Create a development machine."""
-    project_name = _non_empty(project_name, "--project")
-    name = _strip(name, "--name")
-    environment_id = _strip(environment_id, "--environment-id")
-    image_ref = _strip(image_ref, "--image-ref")
-    image_uri = _strip(image_uri, "--image-uri")
-    image_username = _strip(image_username, "--image-username")
-    cpu = _strip(cpu, "--cpu")
-    memory = _strip(memory, "--memory")
-    if bool(environment_id) == bool(image_ref or image_uri):
+    if minimum is not None and maximum is not None and minimum > maximum:
         raise click.UsageError(
-            "provide exactly one of --environment-id or --image-ref/--image-uri"
+            f"{minimum_option} must not be greater than {maximum_option}"
         )
-    if image_ref and image_uri:
-        raise click.UsageError("provide only one of --image-ref and --image-uri")
-    if image_username and not (image_ref or image_uri):
-        raise click.UsageError("--image-username requires --image-ref or --image-uri")
-    if bool(cpu) != bool(memory):
-        raise click.UsageError("--cpu and --memory must be provided together")
-    if (image_ref or image_uri) and not (cpu and memory):
-        raise click.UsageError("direct image creation requires --cpu and --memory")
-
-    image = None
-    if image_ref or image_uri:
-        auth = (
-            models.CreateSandboxReqImageAuth(Username=image_username)
-            if image_username
-            else None
-        )
-        image = models.CreateSandboxReqImageInput(
-            Auth=auth, Ref=image_ref, Uri=image_uri
-        )
-    resources = (
-        models.CreateSandboxReqResources(Cpu=cpu, Memory=memory)
-        if cpu and memory
-        else None
-    )
-    request = models.CreateSandboxReq(
-        ProjectName=project_name,
-        Entrypoint=list(entrypoint) or None,
-        Env=environment,
-        EnvironmentId=environment_id,
-        Image=image,
-        LifecycleMinutes=lifecycle_minutes,
-        Name=name,
-        Ports=ports,
-        RequestTimeoutSeconds=request_timeout_seconds,
-        Resources=resources,
-        Volumes=volumes,
-    )
-    _write_machine(context, _invoke(context, sandbox.create_sandbox, request))
 
 
 @click.command("list")
-@_project_option
-@click.option("--keyword")
-@click.option("--environment-id")
-@click.option("--environment-ids", help="Comma-separated environment identifiers.")
+@click.option("--project", help="Filter by project namespace.")
 @click.option(
-    "--allocation-mode", multiple=True, type=click.Choice(["prewarm", "manual"])
-)
-@click.option(
-    "--run-state",
+    "--workspace-id",
+    "workspace_ids",
     multiple=True,
-    type=click.Choice(
-        [
-            "pending",
-            "running",
-            "terminating",
-            "paused",
-            "failed",
-            "terminated",
-            "expired",
-        ]
-    ),
+    callback=_repeated_text,
+    help="Workspace ID; repeat to match multiple workspaces.",
 )
+@click.option("--name", help="Workspace name filter (fuzzy match).")
+@click.option("--creator", help="Creator username.")
+@click.option("--share", help="Workspace share mode.")
 @click.option(
-    "--state",
+    "--quota-group",
+    "quota_groups",
     multiple=True,
-    type=click.Choice(
-        [
-            "pending",
-            "running",
-            "terminating",
-            "paused",
-            "failed",
-            "terminated",
-            "expired",
-        ]
-    ),
+    callback=_repeated_text,
+    help="Quota group; repeat to match multiple groups.",
+)
+@click.option("--cpu-min", type=click.IntRange(min=0), help="Minimum CPU cores.")
+@click.option("--cpu-max", type=click.IntRange(min=0), help="Maximum CPU cores.")
+@click.option(
+    "--memory-min", type=click.IntRange(min=0), help="Minimum memory in GiB."
 )
 @click.option(
-    "--type",
-    "machine_type",
-    type=click.Choice(["code", "browser", "desktop", "custom"]),
+    "--memory-max", type=click.IntRange(min=0), help="Maximum memory in GiB."
 )
-@click.option("--creator", "creators")
-@click.option("--batch-name")
-@click.option("--metadata")
-@click.option("--quota-groups")
-@click.option("--created-after", callback=_rfc3339)
-@click.option("--created-before", callback=_rfc3339)
-@click.option("--expire-before", callback=_rfc3339)
 @click.option(
-    "--self-only",
-    "self_only",
-    is_flag=True,
-    default=None,
-    help="Only machines created by the current user.",
+    "--creation-timestamp-min",
+    type=click.IntRange(min=0),
+    help="Minimum creation Unix timestamp in seconds.",
 )
-@click.option("--sort-by")
-@click.option("--sort-order", type=click.Choice(["asc", "desc"]))
-@click.option("--limit", type=click.IntRange(min=1))
-@click.option("--offset", type=click.IntRange(min=0))
+@click.option(
+    "--creation-timestamp-max",
+    type=click.IntRange(min=0),
+    help="Maximum creation Unix timestamp in seconds.",
+)
+@click.option(
+    "--close-timestamp-min",
+    type=click.IntRange(min=0),
+    help="Minimum close Unix timestamp in seconds.",
+)
+@click.option(
+    "--close-timestamp-max",
+    type=click.IntRange(min=0),
+    help="Maximum close Unix timestamp in seconds.",
+)
+@click.option("--sort-by", help="Workspace API sort expression.")
+@click.option("--limit", type=click.IntRange(min=1), help="Maximum results.")
+@click.option("--offset", type=click.IntRange(min=0), help="Result offset.")
 @click.pass_obj
 def list_machines(
     context: Any,
-    project_name: str,
-    keyword: str | None,
-    environment_id: str | None,
-    environment_ids: str | None,
-    allocation_mode: tuple[str, ...],
-    run_state: tuple[str, ...],
-    state: tuple[str, ...],
-    machine_type: str | None,
-    creators: str | None,
-    batch_name: str | None,
-    metadata: str | None,
-    quota_groups: str | None,
-    created_after: str | None,
-    created_before: str | None,
-    expire_before: str | None,
-    self_only: bool | None,
+    project: str | None,
+    workspace_ids: list[str] | None,
+    name: str | None,
+    creator: str | None,
+    share: str | None,
+    quota_groups: list[str] | None,
+    cpu_min: int | None,
+    cpu_max: int | None,
+    memory_min: int | None,
+    memory_max: int | None,
+    creation_timestamp_min: int | None,
+    creation_timestamp_max: int | None,
+    close_timestamp_min: int | None,
+    close_timestamp_max: int | None,
     sort_by: str | None,
-    sort_order: str | None,
     limit: int | None,
     offset: int | None,
 ) -> None:
-    """List development machines in a project."""
-    created_after_value = (
-        datetime.fromisoformat(created_after.replace("Z", "+00:00"))
-        if created_after
-        else None
+    """List YiCloud Workspace development machines."""
+    _validate_range(cpu_min, cpu_max, "--cpu-min", "--cpu-max")
+    _validate_range(memory_min, memory_max, "--memory-min", "--memory-max")
+    _validate_range(
+        creation_timestamp_min,
+        creation_timestamp_max,
+        "--creation-timestamp-min",
+        "--creation-timestamp-max",
     )
-    created_before_value = (
-        datetime.fromisoformat(created_before.replace("Z", "+00:00"))
-        if created_before
-        else None
+    _validate_range(
+        close_timestamp_min,
+        close_timestamp_max,
+        "--close-timestamp-min",
+        "--close-timestamp-max",
     )
-    if (
-        created_after_value
-        and created_before_value
-        and created_after_value > created_before_value
-    ):
-        raise click.UsageError(
-            "--created-after must not be later than --created-before"
-        )
-    request = models.ListSandboxesReq(
-        ProjectName=_non_empty(project_name, "--project"),
-        AllocationMode=",".join(allocation_mode) or None,  # type: ignore[arg-type]
-        BatchName=_strip(batch_name, "--batch-name"),
-        CreatedAfter=created_after,
-        CreatedBefore=created_before,
-        Creators=_strip(creators, "--creator"),
-        EnvironmentId=_strip(environment_id, "--environment-id"),
-        EnvironmentIds=_comma_separated(environment_ids, "--environment-ids"),
-        ExpireBefore=expire_before,
-        Keyword=_strip(keyword, "--keyword"),
+    request = models.ListWorkspacesReq(
+        CPUMax=cpu_max,
+        CPUMin=cpu_min,
+        CloseTimestampMax=close_timestamp_max,
+        CloseTimestampMin=close_timestamp_min,
+        CreationTimestampMax=creation_timestamp_max,
+        CreationTimestampMin=creation_timestamp_min,
+        Creator=_optional_text(creator, "--creator"),
         Limit=limit,
-        Metadata=_strip(metadata, "--metadata"),
+        MemoryMax=memory_max,
+        MemoryMin=memory_min,
+        Name=_optional_text(name, "--name"),
         Offset=offset,
-        QuotaGroups=_comma_separated(quota_groups, "--quota-groups"),
-        RunState=",".join(run_state) or None,
-        Self=self_only,
-        SortBy=_strip(sort_by, "--sort-by"),
-        SortOrder=sort_order,  # type: ignore[arg-type]
-        State=",".join(state) or None,
-        Type=machine_type,  # type: ignore[arg-type]
+        Project=_optional_text(project, "--project"),
+        QuotaGroup=quota_groups,
+        Share=_optional_text(share, "--share"),
+        SortBy=_optional_text(sort_by, "--sort-by"),
+        WorkspaceId=workspace_ids,
     )
-    _write_machine_list(context, _invoke(context, sandbox.list_sandboxes, request))
-
-
-def _machine_id_argument(function: Any) -> Any:
-    return click.argument("machine_id")(function)
+    response = _invoke(context, workspace.list_workspaces, request)
+    items = [_workspace_view(item) for item in response.Items or []]
+    if context.output_format is OutputFormat.JSON:
+        context.write({"items": items, "total": response.Total or 0})
+        return
+    context.write(
+        [
+            {
+                "workspace_id": item["workspace_id"],
+                "name": item["name"],
+                "phase": item["phase"],
+                "cpu": item["resources"]["cpu"],
+                "memory": item["resources"]["memory"],
+                "gpu": item["resources"]["gpu"],
+                "creator": item["creator"]["name"],
+                "quota_group": item["quota_group"],
+                "sku_id": item["sku"]["id"],
+                "sku_pool": item["sku"]["pool_name"],
+                "created_at": item["timestamps"]["created"],
+                "updated_at": item["timestamps"]["updated"],
+                "started_at": item["timestamps"]["started"],
+                "stopped_at": item["timestamps"]["stopped"],
+            }
+            for item in items
+        ]
+    )
 
 
 @click.command("inspect")
-@_project_option
-@_machine_id_argument
+@click.option("--project", required=True, help="Project namespace.")
+@click.argument("workspace_id")
 @click.pass_obj
-def inspect_machine(context: Any, project_name: str, machine_id: str) -> None:
-    """Inspect one development machine by identifier."""
-    request = models.GetSandboxReq(
-        ProjectName=_non_empty(project_name, "--project"),
-        SandboxId=_non_empty(machine_id, "MACHINE_ID"),
+def inspect_machine(context: Any, project: str, workspace_id: str) -> None:
+    """Inspect one YiCloud Workspace by Workspace ID."""
+    request = models.GetWorkspaceReq(
+        Project=_non_empty(project, "--project"),
+        WorkspaceId=_non_empty(workspace_id, "WORKSPACE_ID"),
     )
-    _write_machine(context, _invoke(context, sandbox.get_sandbox, request))
+    context.write(_workspace_view(_invoke(context, workspace.get_workspace, request)))
 
 
-def _result(action: str, machine_id: str) -> dict[str, str]:
-    return {"id": machine_id, "action": action, "status": "accepted"}
-
-
-@click.command("stop")
-@_project_option
-@_machine_id_argument
-@click.pass_obj
-def stop_machine(context: Any, project_name: str, machine_id: str) -> None:
-    """Stop one development machine."""
-    machine_id = _non_empty(machine_id, "MACHINE_ID")
-    request = models.StopSandboxReq(
-        ProjectName=_non_empty(project_name, "--project"), SandboxId=machine_id
-    )
-    _invoke(context, sandbox.stop_sandbox, request)
-    context.write(_result("stop", machine_id))
-
-
-@click.command("delete")
-@_project_option
-@_machine_id_argument
-@click.pass_obj
-def delete_machine(context: Any, project_name: str, machine_id: str) -> None:
-    """Delete one development machine."""
-    machine_id = _non_empty(machine_id, "MACHINE_ID")
-    request = models.DeleteSandboxReq(
-        ProjectName=_non_empty(project_name, "--project"), SandboxId=machine_id
-    )
-    _invoke(context, sandbox.delete_sandbox, request)
-    context.write(_result("delete", machine_id))
-
-
-@click.command("batch-delete")
-@_project_option
-@click.argument("machine_ids", nargs=-1, required=True)
-@click.pass_obj
-def batch_delete_machines(
-    context: Any, project_name: str, machine_ids: tuple[str, ...]
-) -> None:
-    """Delete up to 100 development machines."""
-    if len(machine_ids) > 100:
-        raise click.UsageError("at most 100 machine identifiers can be deleted at once")
-    if len(set(machine_ids)) != len(machine_ids):
-        raise click.UsageError("machine identifiers must be unique")
-    request = models.BatchDeleteSandboxesReq(
-        Ids=[_non_empty(item, "MACHINE_IDS") for item in machine_ids],
-        ProjectName=_non_empty(project_name, "--project"),
-    )
-    _write_machine(context, _invoke(context, sandbox.batch_delete_sandboxes, request))
-
-
-@click.command("update-lifecycle")
-@_project_option
-@_machine_id_argument
-@click.option(
-    "--minutes",
-    required=True,
-    type=click.IntRange(min=1),
-    help="New lifetime or extension in minutes.",
-)
-@click.option("--mode", required=True, type=click.Choice(["set", "extend"]))
-@click.pass_obj
-def update_lifecycle(
-    context: Any, project_name: str, machine_id: str, minutes: int, mode: str
-) -> None:
-    """Set or extend a development machine lifecycle."""
-    request = models.UpdateSandboxLifecycleReq(
-        LifecycleMinutes=minutes,
-        Mode=mode,
-        ProjectName=_non_empty(project_name, "--project"),
-        SandboxId=_non_empty(machine_id, "MACHINE_ID"),
-    )
-    _write_machine(context, _invoke(context, sandbox.update_sandbox_lifecycle, request))
-
-
-COMMANDS = (
-    create_machine,
-    list_machines,
-    inspect_machine,
-    stop_machine,
-    delete_machine,
-    batch_delete_machines,
-    update_lifecycle,
-)
+COMMANDS = (list_machines, inspect_machine)
