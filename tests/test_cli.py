@@ -33,9 +33,13 @@ def test_help_and_version_do_not_construct_authenticated_client():
     version_result = runner.invoke(application, ["--version"])
 
     assert help_result.exit_code == 0
-    assert "Manage YiCloud custom tasks and development machines." in help_result.output
+    assert (
+        "Manage YiCloud custom tasks, Workspace machines, and Sandboxes."
+        in help_result.output
+    )
     assert "custom-task" in help_result.output
     assert "development-machine" in help_result.output
+    assert "sandbox" in help_result.output
     assert "--endpoint" in help_result.output
     assert version_result.exit_code == 0
     assert version_result.output.startswith("yicloud, version ")

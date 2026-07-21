@@ -17,6 +17,8 @@ from .auth import AuthenticationError, ClientConfig, build_client
 from .development_machines import COMMANDS as DEVELOPMENT_MACHINE_COMMANDS
 from .errors import ApiError, api_error_from_sdk, format_api_error, redact_sensitive
 from .output import OutputFormat, OutputWriter
+from .sandboxes import COMMANDS as SANDBOX_COMMANDS
+from .sandboxes import LEGACY_DEVELOPMENT_MACHINE_COMMANDS
 
 
 ClientFactory = Callable[..., Client]
@@ -121,6 +123,7 @@ def create_cli(
     *,
     custom_task_commands: Sequence[click.Command] | None = None,
     development_machine_commands: Sequence[click.Command] | None = None,
+    sandbox_commands: Sequence[click.Command] | None = None,
     client_factory: ClientFactory = build_client,
     custom_task_service_factory: CustomTaskServiceFactory | None = None,
     environ: Mapping[str, str] | None = None,
@@ -167,7 +170,7 @@ def create_cli(
         profile: str,
         output_format: str,
     ) -> None:
-        """Manage YiCloud custom tasks and development machines."""
+        """Manage YiCloud custom tasks, Workspace machines, and Sandboxes."""
         ctx.obj = CliContext(
             endpoint=endpoint,
             profile=profile,
@@ -187,7 +190,7 @@ def create_cli(
 
     development_machines = _namespace_group(
         "development-machine",
-        "Manage YiCloud development machines.",
+        "Read YiCloud Workspace development machines.",
     )
     commands = (
         DEVELOPMENT_MACHINE_COMMANDS
@@ -196,7 +199,19 @@ def create_cli(
     )
     for command in commands:
         development_machines.add_command(command)
+    if development_machine_commands is None:
+        for command in LEGACY_DEVELOPMENT_MACHINE_COMMANDS:
+            development_machines.add_command(command)
     application.add_command(development_machines)
+
+    sandboxes = _namespace_group(
+        "sandbox",
+        "Manage YiCloud Sandbox resources (separate from Workspaces).",
+    )
+    commands = SANDBOX_COMMANDS if sandbox_commands is None else sandbox_commands
+    for command in commands:
+        sandboxes.add_command(command)
+    application.add_command(sandboxes)
     return application
 
 

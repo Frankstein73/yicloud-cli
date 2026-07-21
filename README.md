@@ -146,6 +146,7 @@ Start with command discovery, which does not contact YiCloud:
 yicloud --help
 yicloud custom-task --help
 yicloud development-machine --help
+yicloud sandbox --help
 ```
 
 The following API examples require valid credentials, a reachable endpoint,
@@ -178,39 +179,62 @@ and options.
 
 ### Development machines
 
-Every development-machine API command requires a project namespace.
+Development machines are YiCloud Workspace resources served by the
+`workspace/v1alpha1` API. Phase 1 provides the baseline read path: list
+Workspaces with official API filters and inspect one Workspace by its Workspace
+ID.
 
 ```shell
-# Create from an existing development environment.
-yicloud development-machine create \
+yicloud development-machine list \
+  --project my-project \
+  --workspace-id workspace-123 \
+  --creator alice \
+  --quota-group research \
+  --cpu-min 2 \
+  --memory-max 32 \
+  --sort-by 'CreationTime desc' \
+  --limit 25
+
+yicloud --output json development-machine inspect \
+  --project my-project workspace-123
+```
+
+The pinned SDK also exposes Workspace create, edit, start, restart, stop,
+transfer, and delete operations. Those Workspace lifecycle operations are
+outside this phase; their absence from the CLI is a product-scope decision, not
+an SDK limitation. Run `yicloud development-machine COMMAND --help` for all
+read filters and inputs.
+
+### Sandboxes
+
+Sandboxes are separate resources served by the `sandbox/v1alpha1` API. The
+operations that earlier CLI releases mislabeled as development machines remain
+available under the explicit `yicloud sandbox` namespace.
+
+```shell
+yicloud sandbox create \
   --project my-project \
   --environment-id env-123 \
-  --name interactive-dev \
+  --name interactive-sandbox \
   --lifecycle-minutes 120
 
-# Or create directly from an image and explicit resources.
-yicloud development-machine create \
-  --project my-project \
-  --image-ref team/dev-image:latest \
-  --cpu 2 \
-  --memory 4Gi \
-  --env MODE=development \
-  --port 8080:http:web
-
-yicloud development-machine list --project my-project --run-state running
-yicloud --output json development-machine inspect --project my-project sandbox-123
-yicloud development-machine update-lifecycle \
+yicloud sandbox list --project my-project --run-state running
+yicloud --output json sandbox inspect --project my-project sandbox-123
+yicloud sandbox update-lifecycle \
   --project my-project sandbox-123 --mode extend --minutes 60
-yicloud development-machine stop --project my-project sandbox-123
-yicloud development-machine delete --project my-project sandbox-123
-yicloud development-machine batch-delete \
+yicloud sandbox stop --project my-project sandbox-123
+yicloud sandbox delete --project my-project sandbox-123
+yicloud sandbox batch-delete \
   --project my-project sandbox-123 sandbox-456
 ```
 
-The pinned SDK exposes create, list, inspect, stop, delete, batch-delete, and
-lifecycle-update operations. It does not expose start or restart endpoints, so
-the CLI does not advertise them. Run
-`yicloud development-machine COMMAND --help` for all inputs and filters.
+For compatibility, the old mutating spellings under `development-machine`
+(`create`, `stop`, `delete`, `batch-delete`, and
+`update-lifecycle`) remain temporarily available as hidden deprecated aliases
+and print the replacement `yicloud sandbox` command. The old
+`development-machine list` and `inspect` meanings are not retained because
+those names now implement the official Workspace read API; use `sandbox list`
+or `sandbox inspect` for Sandbox IDs.
 
 ## Troubleshooting
 
