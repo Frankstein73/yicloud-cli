@@ -180,9 +180,80 @@ and options.
 ### Development machines
 
 Development machines are YiCloud Workspace resources served by the
-`workspace/v1alpha1` API. Phase 1 provides the baseline read path: list
-Workspaces with official API filters and inspect one Workspace by its Workspace
-ID.
+`workspace/v1alpha1` API. Create supports either quota-group resources or a SKU;
+the modes are mutually exclusive. Workspace names are required.
+
+Quota mode requires a runtime mode, CPU, memory, and quota group. GPU is
+optional:
+
+```shell
+yicloud --output json development-machine create \
+  --name research-notebook \
+  --project my-project \
+  --description 'Interactive research workspace' \
+  --image registry.example/notebook:2026.07 \
+  --env MODE=research \
+  --env LOG_LEVEL=info \
+  --runtime-mode kata \
+  --cpu 4 \
+  --memory 16Gi \
+  --gpu 1 \
+  --quota-group research \
+  --use-private-machine
+```
+
+SKU mode requires `--sku-id` and exactly one public/private pool selection. A
+private SKU also requires exactly one of tenant/project scope. Nested disks are
+loaded from reusable JSON or YAML files. For example, save this as
+`system-disk.yaml`:
+
+```yaml
+name: system
+storage: 100Gi
+storage_class_name: fast-rbd
+data_source:
+  api_group: image.brainpp.cn
+  kind: Image
+  name: ubuntu-22
+```
+
+Save this clone configuration as `data-disk.json`:
+
+```json
+{
+  "name": "dataset-copy",
+  "data_source_type": "clone",
+  "storage": "500Gi",
+  "data_source": {
+    "api_group": "workspace.brainpp.cn",
+    "kind": "Workspace",
+    "name": "workspace-source"
+  }
+}
+```
+
+Then create the Workspace:
+
+```shell
+yicloud development-machine create \
+  --name sku-notebook \
+  --project my-project \
+  --sku-id sku-a100 \
+  --sku-private \
+  --sku-project \
+  --system-disk system-disk.yaml \
+  --data-disk data-disk.json \
+  --mount-gpfs 'gpfs://gpfs1/legacy:/mnt/legacy' \
+  --gpfs-volume 'gpfs://gpfs1/team=/mnt/team'
+```
+
+Disk files accept the official field names or their snake-case equivalents.
+New blank disks and Image-backed disks require `storage`. Existing Volume data
+sources may omit storage. Clone sources require `data_source_type: clone` and a
+non-Image data source. `storage_class_name` is optional for all forms.
+
+List Workspaces with official API filters and inspect one Workspace by its
+Workspace ID:
 
 ```shell
 yicloud development-machine list \
@@ -199,11 +270,10 @@ yicloud --output json development-machine inspect \
   --project my-project workspace-123
 ```
 
-The pinned SDK also exposes Workspace create, edit, start, restart, stop,
-transfer, and delete operations. Those Workspace lifecycle operations are
-outside this phase; their absence from the CLI is a product-scope decision, not
-an SDK limitation. Run `yicloud development-machine COMMAND --help` for all
-read filters and inputs.
+The pinned SDK also exposes Workspace edit, start, restart, stop, transfer, and
+delete operations. Those additional Workspace lifecycle operations remain
+outside this phase. Run `yicloud development-machine COMMAND --help` for all
+supported inputs.
 
 ### Sandboxes
 
@@ -228,13 +298,14 @@ yicloud sandbox batch-delete \
   --project my-project sandbox-123 sandbox-456
 ```
 
-For compatibility, the old mutating spellings under `development-machine`
-(`create`, `stop`, `delete`, `batch-delete`, and
+For compatibility, the old Sandbox mutating spellings under
+`development-machine` (`stop`, `delete`, `batch-delete`, and
 `update-lifecycle`) remain temporarily available as hidden deprecated aliases
-and print the replacement `yicloud sandbox` command. The old
-`development-machine list` and `inspect` meanings are not retained because
-those names now implement the official Workspace read API; use `sandbox list`
-or `sandbox inspect` for Sandbox IDs.
+and print the replacement `yicloud sandbox` command. `development-machine
+create` now creates an official Workspace; use `sandbox create` for Sandboxes.
+The old `development-machine list` and `inspect` meanings are not retained
+because those names now implement the official Workspace read API; use
+`sandbox list` or `sandbox inspect` for Sandbox IDs.
 
 ## Troubleshooting
 
