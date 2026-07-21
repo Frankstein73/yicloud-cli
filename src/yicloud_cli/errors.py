@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from .auth import ACCESS_KEY_ENV, SECRET_KEY_ENV
 
@@ -27,6 +28,18 @@ class ApiError(Exception):
 
     def __str__(self) -> str:
         return self.message
+
+
+def api_error_from_sdk(error: Any) -> ApiError:
+    """Convert an SDK exception to the CLI's stable error representation."""
+    message = getattr(error, "message", None) or "YiCloud API request failed"
+    code = getattr(error, "code", None)
+    status = getattr(error, "status_code", None)
+    return ApiError(
+        message=str(message),
+        code=code if code not in (None, 0) else None,
+        status=status if status not in (None, 0) else None,
+    )
 
 
 def redact_sensitive(value: object, environ: Mapping[str, str]) -> str:

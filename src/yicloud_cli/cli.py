@@ -14,11 +14,12 @@ import requests
 from yicloud.base.client import Client
 
 from .auth import AuthenticationError, ClientConfig, build_client
-from .errors import ApiError, format_api_error, redact_sensitive
+from .errors import ApiError, api_error_from_sdk, format_api_error, redact_sensitive
 from .output import OutputFormat, OutputWriter
 
 
 ClientFactory = Callable[..., Client]
+CustomTaskServiceFactory = Callable[[Client], Any]
 
 
 def _package_version() -> str:
@@ -42,7 +43,11 @@ class CliContext:
     output_format: OutputFormat
     environ: Mapping[str, str] = field(repr=False)
     client_factory: ClientFactory = field(default=build_client, repr=False)
+    custom_task_service_factory: CustomTaskServiceFactory | None = field(
+        default=None, repr=False
+    )
     _client: Client | None = field(default=None, init=False, repr=False)
+    _custom_tasks: Any = field(default=None, init=False, repr=False)
 
     @property
     def client(self) -> Client:
@@ -58,6 +63,17 @@ class CliContext:
         """Render a command result using the selected global output format."""
         OutputWriter(self.output_format, environ=self.environ).write(value)
 
+    @property
+    def custom_tasks(self) -> Any:
+        """Return the custom-task service bound to this command's client."""
+        if self._custom_tasks is None:
+            if self.custom_task_service_factory is None:
+                from .custom_tasks import CustomTaskService
+
+                self.custom_task_service_factory = CustomTaskService
+            self._custom_tasks = self.custom_task_service_factory(self.client)
+        return self._custom_tasks
+
 
 pass_cli_context = click.make_pass_decorator(CliContext)
 
@@ -68,6 +84,8 @@ class YiCloudGroup(click.Group):
     def invoke(self, ctx: click.Context) -> Any:
         try:
             return super().invoke(ctx)
+        except click.exceptions.Exit:
+            raise
         except click.ClickException:
             raise
         except AuthenticationError as error:
@@ -79,7 +97,18 @@ class YiCloudGroup(click.Group):
             environ = ctx.find_root().obj.environ if ctx.find_root().obj else os.environ
             message = redact_sensitive(error, environ)
             raise click.ClickException(f"API request failed: {message}") from None
-        except Exception:
+        except Exception as error:
+            # The generated SDK's exception hierarchy is intentionally imported
+            # lazily so help/version remain lightweight and credential-free.
+            from yicloud.base.errs import YiCloudException
+
+            if isinstance(error, YiCloudException):
+                environ = (
+                    ctx.find_root().obj.environ if ctx.find_root().obj else os.environ
+                )
+                raise click.ClickException(
+                    format_api_error(api_error_from_sdk(error), environ)
+                ) from None
             raise click.ClickException(
                 "Command failed unexpectedly; no sensitive details were displayed."
             ) from None
@@ -91,13 +120,18 @@ def _namespace_group(name: str, help_text: str) -> click.Group:
 
 def create_cli(
     *,
-    custom_task_commands: Sequence[click.Command] = (),
+    custom_task_commands: Sequence[click.Command] | None = None,
     development_machine_commands: Sequence[click.Command] = (),
     client_factory: ClientFactory = build_client,
+    custom_task_service_factory: CustomTaskServiceFactory | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> click.Group:
     """Build the CLI, optionally registering resource commands into namespaces."""
     cli_environ = os.environ if environ is None else environ
+    if custom_task_commands is None:
+        from .custom_tasks import custom_task_commands as default_custom_task_commands
+
+        custom_task_commands = default_custom_task_commands
 
     @click.group(
         cls=YiCloudGroup, context_settings={"help_option_names": ["-h", "--help"]}
@@ -141,6 +175,7 @@ def create_cli(
             output_format=OutputFormat(output_format.lower()),
             environ=cli_environ,
             client_factory=client_factory,
+            custom_task_service_factory=custom_task_service_factory,
         )
 
     custom_tasks = _namespace_group(
